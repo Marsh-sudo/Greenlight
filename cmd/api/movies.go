@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/Marsh-sudo/greenlight/internal/data"
 	"github.com/Marsh-sudo/greenlight/internal/validator"
-
 )
 
 func (app *application) createMovieHandler(w http.ResponseWriter, r *http.Request) {
@@ -119,11 +119,19 @@ func (app *application) updateMovieHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if r.Header.Get("X-Expected-Version") != "" {
+		if strconv.FormatInt(int64(movie.Version),32) != r.Header.Get("X-Expected-Version") {
+			app.editConflictResponse(w,r)
+			return
+		}
+	}
+
 	// declare an input struct to hold the expected data
+	//using pointer for the Title,Year and Runtime
 	var input struct{
-		Title string `json:"title"`
-		Year int32 `json:"year"`
-		Runtime data.Runtime `json:"runtime"`
+		Title *string `json:"title"`
+		Year *int32 `json:"year"`
+		Runtime *data.Runtime `json:"runtime"`
 		Genres []string `json:"genres"` 
 	}
 
@@ -135,10 +143,19 @@ func (app *application) updateMovieHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	//copy the values from the request body to the appropriate fields of the movie
-	movie.Title=input.Title
-	movie.Year=input.Year
-	movie.Runtime=input.Runtime
-	movie.Genres=input.Genres
+	if input.Title != nil {
+		movie.Title = *input.Title
+	}
+
+	if input.Year != nil {
+		movie.Year = *input.Year
+	}
+	if input.Runtime != nil {
+		movie.Runtime = *input.Runtime
+	}
+	if input.Genres != nil {
+		movie.Genres = input.Genres
+	}
 
 	//validate the updated movie record sendiing the client a 422 Unprocessable Entity
 	v := validator.New()
@@ -150,7 +167,12 @@ func (app *application) updateMovieHandler(w http.ResponseWriter, r *http.Reques
 	// pass the updated movie record to our new Update method
 	err = app.models.Movie.Update(movie)
 	if err != nil {
-		app.serverErrorResponse(w,r,err)
+		switch {
+		case errors.Is(err,data.ErrEditConflict):
+			app.editConflictResponse(w,r)
+		default:
+			app.serverErrorResponse(w, r,err)
+		}
 		return
 	}
 
@@ -186,4 +208,56 @@ func (app *application) deleteMovieHandler(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		app.serverErrorResponse(w,r,err)
 	}
+}
+
+
+func (app *application) listMoviesHandler(w http.ResponseWriter,r *http.Request) {
+	// To keep things consistent with our other handlers, we'll define an input struct // to hold the expected values from the request query string
+	var input struct {
+		Title string
+		Genres []string
+		data.Filters
+	}
+
+	v := validator.New()
+
+	// Call r.URL.Query() to get the url.Values map containing the query string data.
+	qs := r.URL.Query()
+
+	// Use our helpers to extract the title and genres query string values, falling back // to defaults of an empty string and an empty slice respectively if they are not
+	// provided by the client.
+	input.Title = app.readString(qs,"title", "")
+	input.Genres = app.readCSV(qs,"genres",[]string{})
+
+	// Get the page and page_size query string values as integers. Notice that we set // the default page value to 1 and default page_size to 20, and that we pass the // validator instance as the final argument here.
+	input.Filters.Page = app.readInt(qs,"page",1,v)
+	input.Filters.PageSize = app.readInt(qs, "page_size",20,v)
+
+	// Extract the sort query string value, falling back to "id" if it is not provided // by the client (which will imply a ascending sort on movie ID).
+	input.Filters.Sort = app.readString(qs,"sort","id")
+
+	input.Filters.SortSafelist = []string{"id", "title", "year", "runtime", "-id", "-title", "-year", "-runtime"}
+
+
+	// Check the Validator instance for any errors and use the failedValidationResponse() // helper to send the client a response if necessary.
+	if data.ValidateFilters(v,input.Filters); !v.Valid() {
+		app.failedValidationResponse(w,r,v.Errors)
+		return
+	}
+
+	movies,err := app.models.Movie.GetAll(input.Title,input.Genres,input.Filters)
+	if err != nil {
+		app.serverErrorResponse(w,r,err)
+		return
+	}
+
+	err = app.writeJSON(w,http.StatusOK,envelope{"movies":movies},nil)
+	if err != nil {
+		app.serverErrorResponse(w,r,err)
+	}
+
+
+// Dump the contents of the input struct in a HTTP response.
+	fmt.Fprintf(w, "%+v\n",input)
+
 }
