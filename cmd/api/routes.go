@@ -5,7 +5,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 )
 
-func (app *application) routes() *httprouter.Router {
+func (app *application) routes() http.Handler {
 	router := httprouter.New()
 	router.NotFound = http.HandlerFunc(app.notFoundResponse)
 	router.MethodNotAllowed = http.HandlerFunc(app.methodNotAllowedResponse)
@@ -16,6 +16,12 @@ func (app *application) routes() *httprouter.Router {
 	router.HandlerFunc(http.MethodPatch,"/v1/movies/:id",app.updateMovieHandler)
 	router.HandlerFunc(http.MethodDelete,"/v1/movies/:id",app.deleteMovieHandler)
 
+	router.HandlerFunc(http.MethodPost, "/v1/users", app.registerUserHandler)
+	router.HandlerFunc(http.MethodPut,"/v1/users/activated",app.activateUserHandler)
+	router.HandlerFunc(http.MethodPost,"/v1/tokens/authentication",app.createAuthenticationTokenHandler)
 
-	return router
+
+	return app.recoverPanic(app.ratelimit(app.authenticate(router)))
 }
+
+///Backend Developer and DevOps Engineer with an obsession for open-source collaboration. Proficient in Python and Golang, with expertise in database management, API integration, and cloud technologies. Skilled in CI/CD pipelines, Docker, and Kubernetes for streamlined development and deployment. Committed to delivering scalable, efficient solutions while actively contributing to open-source projects.
